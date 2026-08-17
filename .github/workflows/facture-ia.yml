@@ -3,19 +3,14 @@ name: Facture IA manuelle
 on:
   workflow_dispatch:
     inputs:
-      email_to:
-        description: "Email du client"
+      client_name:
+        description: "Nom du client (pour le titre de la release)"
         required: true
         type: string
 
       client_infos:
         description: "Message brut du client (coller ici)"
         required: true
-        type: string
-
-      payment_amount:
-        description: "Montant payé (ex: 300000)"
-        required: false
         type: string
 
       style:
@@ -57,14 +52,8 @@ on:
         default: ""
         type: string
 
-      dry_run:
-        description: "Mode test (génère mais n'envoie pas)"
-        required: true
-        type: boolean
-        default: true
-
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generer_facture:
@@ -98,7 +87,6 @@ jobs:
           if [ -f "logos/${{ inputs.logo }}" ]; then
             echo "LOGO_PATH=logos/${{ inputs.logo }}" >> "$GITHUB_ENV"
           else
-            echo "⚠️ Logo introuvable : logos/${{ inputs.logo }}"
             echo "LOGO_PATH=" >> "$GITHUB_ENV"
           fi
 
@@ -109,7 +97,6 @@ jobs:
       - name: Transformer les infos client en JSON avec IA
         env:
           CLIENT_INFOS: ${{ inputs.client_infos }}
-          EMAIL_TO: ${{ inputs.email_to }}
           STYLE: ${{ inputs.style }}
           COULEUR_ACCENT: ${{ inputs.couleur_accent }}
           TAILLE_PAPIER: ${{ inputs.taille_papier }}
@@ -123,37 +110,49 @@ jobs:
         run: python NFact.py --config invoice.json --output-dir out
 
       - name: Validation avant envoi
-        env:
-          PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
         run: python scripts/validate.py invoice.json
 
-      - name: Bloquer si envoi réel sans email
-        if: ${{ !inputs.dry_run && inputs.email_to == '' }}
+      - name: Obtenir le nom du PDF
+        id: pdf
         run: |
-          echo "Tu dois renseigner email_to si dry_run=false"
-          exit 1
+          PDF_FILE=$(ls out/*.pdf | head -n1)
+          PDF_NAME=$(basename "$PDF_FILE")
+          echo "pdf_path=$PDF_FILE" >> "$GITHUB_OUTPUT"
+          echo "pdf_name=$PDF_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Envoyer le PDF par email
-        if: ${{ !inputs.dry_run }}
-        uses: dawidd6/action-send-mail@v3
+      - name: Créer une release avec le PDF
+        id: release
+        uses: softprops/action-gh-release@v2
         with:
-          server_address: smtp-mail.outlook.com
-          server_port: 587
-          username: ${{ secrets.EMAIL_USER }}
-          password: ${{ secrets.EMAIL_PASS }}
-          subject: Votre facture / devis
-          to: ${{ inputs.email_to }}
-          from: ${{ secrets.EMAIL_USER }}
+          tag_name: facture-${{ github.run_number }}
+          name: "Facture ${{ inputs.client_name }} - ${{ steps.pdf.outputs.pdf_name }}"
           body: |
-            Bonjour,
+            ## 📄 Document généré
+            
+            **Client** : ${{ inputs.client_name }}
+            **Date** : ${{ github.run_id }}
+            **Style** : ${{ inputs.style }}
+            
+            Cliquez sur le fichier ci-dessous pour le télécharger.
+          files: ${{ steps.pdf.outputs.pdf_path }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-            Veuillez trouver votre document en pièce jointe.
-
-            Merci de votre confiance.
-          attachments: out/
-
-      - name: Sauvegarder le PDF
-        uses: actions/upload-artifact@v4
-        with:
-          name: facture-pdf
-          path: out/*.pdf
+      - name: Afficher le lien de téléchargement
+        run: |
+          echo ""
+          echo "╔════════════════════════════════════════════════════════╗"
+          echo "║  ✅ PDF GÉNÉRÉ AVEC SUCCÈS                            ║"
+          echo "╠════════════════════════════════════════════════════════╣"
+          echo "║                                                        ║"
+          echo "║  📎 LIEN DE TÉLÉCHARGEMENT :                           ║"
+          echo "║  ${{ steps.release.outputs.url }}"
+          echo "║                                                        ║"
+          echo "║  📄 Fichier : ${{ steps.pdf.outputs.pdf_name }}"
+          echo "║                                                        ║"
+          echo "╚════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "👉 Copie ce lien et envoie-le à ton client par WhatsApp/SMS/email"
+          echo ""
