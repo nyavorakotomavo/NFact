@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Transforme le message brut du client en invoice.json.
-Gère : vendeur, style, couleur, format, logo.
+Extrait les infos du vendeur ET du client depuis deux messages bruts.
+Aucun fichier pré-créé nécessaire.
 """
 
 import os
@@ -28,32 +28,6 @@ def parse_number(value, default=0.0):
         return default
 
 
-def load_seller():
-    """Charge le vendeur depuis la variable SELLER_FILE ou config/vendeur.json"""
-    seller_file = os.getenv("SELLER_FILE", "")
-    
-    if seller_file:
-        path = Path(seller_file)
-        if path.is_file():
-            try:
-                return json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    
-    # Fallback : config/vendeur.json
-    path = Path("config/vendeur.json")
-    if path.is_file():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    
-    return {
-        "nom": "Mon Entreprise", "adresse": "", "telephone": "",
-        "email": "", "nif": "", "stat": "", "logo": ""
-    }
-
-
 def extract_json(text):
     if not text:
         return None
@@ -70,27 +44,46 @@ def extract_json(text):
     return None
 
 
-def call_ai(raw):
+def call_ai(seller_raw, client_raw):
     api_key = os.getenv("AI_API_KEY")
     url = os.getenv("AI_API_URL", "")
     model = os.getenv("AI_MODEL", "")
 
     if not api_key or not url or not model:
-        print("⚠️  IA non configurée")
-        return None
+        print("❌ IA non configurée. Ajoute les secrets AI_API_KEY, AI_API_URL, AI_MODEL.")
+        sys.exit(1)
 
     print(f"🤖 Appel IA : {model}")
 
     system_prompt = """Tu es un expert en extraction d'informations de facturation.
-Extrais TOUTES les informations depuis le texte brut du client.
-Retourne UNIQUEMENT un JSON valide, sans markdown, sans texte autour.
+Tu vas recevoir DEUX messages :
+
+1. SELLER_INFOS : les informations du VENDEUR (celui qui émet la facture, l'entreprise qui vend)
+2. CLIENT_INFOS : le message du CLIENT (celui qui reçoit la facture, celui qui paie) avec sa demande
+
+Extrais les informations et retourne UNIQUEMENT un JSON valide, sans markdown.
 
 Format exact :
 {
+  "vendeur": {
+    "nom": "nom de l'entreprise du vendeur",
+    "adresse": "adresse complète",
+    "telephone": "numéro",
+    "email": "email",
+    "nif": "NIF si mentionné",
+    "stat": "STAT si mentionné"
+  },
+  "client": {
+    "nom": "nom du client ou de son entreprise",
+    "adresse": "adresse",
+    "telephone": "numéro",
+    "email": "email"
+  },
   "type_document": "FACTURE ou DEVIS",
   "devise": "Ar, EUR, USD",
-  "client": {"nom": "", "adresse": "", "telephone": "", "email": ""},
-  "articles": [{"designation": "", "quantite": 1, "prix_unitaire": 0}],
+  "articles": [
+    {"designation": "description du service", "quantite": 1, "prix_unitaire": 0}
+  ],
   "tva_pourcentage": 0,
   "remise_pourcentage": 0,
   "remise_montant": 0,
@@ -98,21 +91,27 @@ Format exact :
 }
 
 RÈGLES CRITIQUES :
-- Le "client" est la personne/entreprise QUI REÇOIT la facture (celui qui paie)
-- Les "articles" sont UNIQUEMENT les produits/services facturés avec leur prix
-- N'inclus JAMAIS dans les articles du texte conversationnel comme "bonjour", "merci", "n'oublie pas"
-- Si un prix est mentionné pour un service, extrais-le comme article
-- Quantité par défaut = 1
-- Si le texte dit "3 mois de maintenance à 150 000 Ar le mois", c'est : quantite=3, prix_unitaire=150000
-- N'invente JAMAIS d'informations absentes du texte
-- La devise par défaut est "Ar" si non précisée"""
+- Le VENDEUR est celui qui ÉMET la facture (ses infos sont dans SELLER_INFOS)
+- Le CLIENT est celui qui REÇOIT la facture (ses infos sont dans CLIENT_INFOS)
+- Les articles sont extraits UNIQUEMENT depuis CLIENT_INFOS
+- N'inclus JAMAIS de texte conversationnel dans les articles
+- Si "3 mois de maintenance à 150 000 Ar le mois" → quantite=3, prix_unitaire=150000
+- Devise par défaut : "Ar"
+- Type par défaut : "FACTURE" (sauf si le client demande explicitement un devis)
+- N'invente JAMAIS d'informations absentes des messages"""
+
+    user_message = f"""SELLER_INFOS :
+{seller_raw}
+
+CLIENT_INFOS :
+{client_raw}"""
 
     payload = {
         "model": model,
         "temperature": 0.1,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Extrais les infos de facturation :\n\n{raw}"}
+            {"role": "user", "content": user_message}
         ]
     }
 
@@ -127,33 +126,31 @@ RÈGLES CRITIQUES :
         print(f"📡 Réponse HTTP : {resp.status_code}")
         if resp.status_code != 200:
             print(f"❌ Erreur API : {resp.text[:300]}")
-            return None
+            sys.exit(1)
         content = resp.json()["choices"][0]["message"]["content"]
         result = extract_json(content)
-        if result:
-            print("✅ IA a retourné un JSON valide")
-        else:
-            print("⚠️  La réponse IA n'est pas du JSON valide")
+        if not result:
+            print("❌ La réponse IA n'est pas du JSON valide")
+            print(f"   Réponse brute : {content[:200]}")
+            sys.exit(1)
         return result
     except Exception as e:
         print(f"❌ Exception IA : {e}")
-        return None
+        sys.exit(1)
 
 
 def sanitize_articles(articles):
-    """Nettoie et valide les articles. Rejette les articles suspects."""
     result = []
     if not isinstance(articles, list):
         return result
-    
-    # Mots qui indiquent un texte conversationnel, pas un article
+
     stop_words = [
         "bonjour", "salut", "merci", "n'oublie", "oublie pas", "s'il te plaît",
         "stp", "comme convenu", "suite à", "tu peux", "envoie", "dès que",
-        "mon numéro", "adresse", "je suis", "c'est", "voici", "peux-tu",
-        "n'oubliez", "pourriez", "cordialement", "bien à toi"
+        "mon numéro", "je suis", "c'est", "voici", "peux-tu", "pourriez",
+        "cordialement", "bien à toi", "n'oubliez"
     ]
-    
+
     for art in articles:
         if not isinstance(art, dict):
             continue
@@ -161,94 +158,101 @@ def sanitize_articles(articles):
             art.get("designation") or art.get("name") or
             art.get("produit") or art.get("service") or ""
         ).strip()
-        
+
         if not designation:
             continue
-        
-        # Rejeter les articles trop longs (>100 chars = probablement du texte conversationnel)
         if len(designation) > 100:
             print(f"  ⚠️  Article rejeté (trop long) : {designation[:50]}...")
             continue
-        
-        # Rejeter les articles contenant des mots conversationnels
         lower_desig = designation.lower()
         if any(w in lower_desig for w in stop_words):
-            print(f"  ⚠️  Article rejeté (texte conversationnel) : {designation[:50]}...")
+            print(f"  ⚠️  Article rejeté (conversationnel) : {designation[:50]}...")
             continue
-        
+
         quantite = parse_number(art.get("quantite") or art.get("quantity"), 1)
         if quantite <= 0 or quantite > 10000:
             quantite = 1
-        
         prix = parse_number(
             art.get("prix_unitaire") or art.get("price") or art.get("prix"), 0
         )
         if prix < 0:
             prix = 0
-        
-        # Rejeter les articles avec un prix absurde (> 1 milliard)
         if prix > 1_000_000_000:
             print(f"  ⚠️  Article rejeté (prix absurde) : {designation[:50]}...")
             continue
-        
+
         result.append({
             "designation": designation,
             "quantite": quantite,
             "prix_unitaire": prix
         })
-    
     return result
 
 
 def main():
-    raw = os.getenv("CLIENT_INFOS", "")
+    seller_raw = os.getenv("SELLER_INFOS", "")
+    client_raw = os.getenv("CLIENT_INFOS", "")
     style = os.getenv("STYLE", "stripe")
     couleur_accent = os.getenv("COULEUR_ACCENT", "#2E5CFF")
     taille_papier = os.getenv("TAILLE_PAPIER", "A4")
     logo_path = os.getenv("LOGO_PATH", "")
 
-    if not raw.strip():
+    if not seller_raw.strip():
+        print("❌ SELLER_INFOS est vide")
+        sys.exit(1)
+    if not client_raw.strip():
         print("❌ CLIENT_INFOS est vide")
         sys.exit(1)
 
     print("=" * 60)
-    print("📥 Texte reçu du client :")
+    print("📥 Message VENDEUR :")
     print("-" * 60)
-    print(raw[:500])
+    print(seller_raw[:300])
+    print("-" * 60)
+    print("📥 Message CLIENT :")
+    print("-" * 60)
+    print(client_raw[:300])
     print("-" * 60)
 
-    seller = load_seller()
-    print(f"🏢 Vendeur : {seller.get('nom', '?')}")
-    print(f"🎨 Style   : {style}")
-    print(f"🖌️  Couleur : {couleur_accent}")
-    print(f"📄 Format  : {taille_papier}")
-    print(f"🖼️  Logo    : {logo_path or '(aucun)'}")
-    print("-" * 60)
+    # Appeler l'IA
+    ai_result = call_ai(seller_raw, client_raw)
+
+    # Extraire vendeur
+    vendeur = {
+        "nom": "", "adresse": "", "telephone": "",
+        "email": "", "nif": "", "stat": "", "logo": ""
+    }
+    if isinstance(ai_result.get("vendeur"), dict):
+        v = ai_result["vendeur"]
+        vendeur = {
+            "nom": str(v.get("nom", "")).strip(),
+            "adresse": str(v.get("adresse", "")).strip(),
+            "telephone": str(v.get("telephone", "")).strip(),
+            "email": str(v.get("email", "")).strip(),
+            "nif": str(v.get("nif", "")).strip(),
+            "stat": str(v.get("stat", "")).strip(),
+            "logo": ""
+        }
 
     # Appliquer le logo si fourni
     if logo_path and Path(logo_path).is_file():
-        seller["logo"] = logo_path
+        vendeur["logo"] = logo_path
 
-    # Appeler l'IA
-    ai_result = call_ai(raw)
-
-    if not ai_result or not isinstance(ai_result, dict):
-        print("❌ L'IA n'a pas pu extraire les informations.")
-        print("💡 Vérifie que tes secrets AI_API_KEY, AI_API_URL, AI_MODEL sont corrects.")
-        print("💡 Ou fournis un message plus structuré avec les articles et prix.")
-        sys.exit(1)
-
-    # Extraire les infos
+    # Extraire client
     client = {"nom": "", "adresse": "", "telephone": "", "email": ""}
     if isinstance(ai_result.get("client"), dict):
+        c = ai_result["client"]
         client = {
-            "nom": str(ai_result["client"].get("nom", "")).strip(),
-            "adresse": str(ai_result["client"].get("adresse", "")).strip(),
-            "telephone": str(ai_result["client"].get("telephone", "")).strip(),
-            "email": str(ai_result["client"].get("email", "")).strip()
+            "nom": str(c.get("nom", "")).strip(),
+            "adresse": str(c.get("adresse", "")).strip(),
+            "telephone": str(c.get("telephone", "")).strip(),
+            "email": str(c.get("email", "")).strip()
         }
 
+    # Extraire articles
     articles = sanitize_articles(ai_result.get("articles"))
+
+    # Autres champs
     type_doc = str(ai_result.get("type_document", "FACTURE")).upper()
     devise = str(ai_result.get("devise", "Ar"))
     tva = parse_number(ai_result.get("tva_pourcentage"), 0)
@@ -257,23 +261,27 @@ def main():
     conditions = str(ai_result.get("conditions_paiement", "") or "Paiement à réception de facture.")
 
     # Validation
+    erreurs = []
+    if not vendeur.get("nom"):
+        erreurs.append("Nom du vendeur introuvable dans le message vendeur")
     if not client.get("nom"):
-        print("❌ Nom du client introuvable dans le message.")
-        sys.exit(1)
-
+        erreurs.append("Nom du client introuvable dans le message client")
     if not articles:
-        print("❌ Aucun article valide extrait du message.")
-        print("💡 Le message doit contenir des services/produits avec leurs prix.")
+        erreurs.append("Aucun article valide extrait du message client")
+
+    if erreurs:
+        print("❌ Extraction incomplète :")
+        for e in erreurs:
+            print(f"  - {e}")
         sys.exit(1)
 
-    # Valider la couleur
+    # Valider couleur
     try:
         from reportlab.lib import colors as rl_colors
         rl_colors.HexColor(couleur_accent)
     except Exception:
         couleur_accent = "#2E5CFF"
 
-    # Valider le format
     if taille_papier.upper() not in ("A4", "LETTER", "A5"):
         taille_papier = "A4"
 
@@ -283,7 +291,7 @@ def main():
         "style": style,
         "couleur_accent": couleur_accent,
         "taille_papier": taille_papier.upper(),
-        "vendeur": seller,
+        "vendeur": vendeur,
         "client": client,
         "articles": articles,
         "tva_pourcentage": tva,
@@ -304,9 +312,12 @@ def main():
     print("\n" + "=" * 60)
     print("✅ invoice.json créé avec succès !")
     print("=" * 60)
-    print(f"🏢 Vendeur   : {seller.get('nom')}")
+    print(f"🏢 Vendeur   : {vendeur.get('nom')}")
+    print(f"   Adresse   : {vendeur.get('adresse') or '(non renseignée)'}")
+    print(f"   Tél       : {vendeur.get('telephone') or '-'}")
+    print(f"   Email     : {vendeur.get('email') or '-'}")
     print(f"👤 Client    : {client.get('nom')}")
-    print(f"📍 Adresse   : {client.get('adresse') or '(non renseignée)'}")
+    print(f"   Adresse   : {client.get('adresse') or '(non renseignée)'}")
     print(f"📋 Type      : {invoice['type_document']}")
     print(f"💰 Devise    : {devise}")
     print(f"🎨 Style     : {style}")

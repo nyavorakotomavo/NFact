@@ -3,13 +3,13 @@ name: Facture IA manuelle
 on:
   workflow_dispatch:
     inputs:
-      client_name:
-        description: "Nom du client (pour le titre de la release)"
+      seller_infos:
+        description: "Infos du vendeur (coller le message du vendeur)"
         required: true
         type: string
 
       client_infos:
-        description: "Message brut du client (coller ici)"
+        description: "Message du client (coller ici)"
         required: true
         type: string
 
@@ -47,7 +47,7 @@ on:
         default: A4
 
       logo:
-        description: "Nom du fichier logo dans logos/ (ex: logo.png) ou URL"
+        description: "URL du logo du vendeur (optionnel)"
         required: false
         default: ""
         type: string
@@ -75,27 +75,19 @@ jobs:
         run: mkdir -p out
 
       - name: Télécharger le logo si URL
-        if: ${{ inputs.logo != '' && startsWith(inputs.logo, 'http') }}
+        if: ${{ inputs.logo != '' }}
         run: |
           mkdir -p logos
           curl -sL "${{ inputs.logo }}" -o logos/logo_download.png
           echo "LOGO_PATH=logos/logo_download.png" >> "$GITHUB_ENV"
 
-      - name: Utiliser le logo du repo
-        if: ${{ inputs.logo != '' && !startsWith(inputs.logo, 'http') }}
-        run: |
-          if [ -f "logos/${{ inputs.logo }}" ]; then
-            echo "LOGO_PATH=logos/${{ inputs.logo }}" >> "$GITHUB_ENV"
-          else
-            echo "LOGO_PATH=" >> "$GITHUB_ENV"
-          fi
-
       - name: Pas de logo
         if: ${{ inputs.logo == '' }}
         run: echo "LOGO_PATH=" >> "$GITHUB_ENV"
 
-      - name: Transformer les infos client en JSON avec IA
+      - name: Extraire vendeur + client avec IA
         env:
+          SELLER_INFOS: ${{ inputs.seller_infos }}
           CLIENT_INFOS: ${{ inputs.client_infos }}
           STYLE: ${{ inputs.style }}
           COULEUR_ACCENT: ${{ inputs.couleur_accent }}
@@ -125,13 +117,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: facture-${{ github.run_number }}
-          name: "Facture ${{ inputs.client_name }} - ${{ steps.pdf.outputs.pdf_name }}"
+          name: "Facture ${{ github.run_number }}"
           body: |
-            ## 📄 Document généré
-            
-            **Client** : ${{ inputs.client_name }}
-            **Date** : ${{ github.run_id }}
-            **Style** : ${{ inputs.style }}
+            📄 **Fichier** : ${{ steps.pdf.outputs.pdf_name }}
             
             Cliquez sur le fichier ci-dessous pour le télécharger.
           files: ${{ steps.pdf.outputs.pdf_path }}
@@ -140,19 +128,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Afficher le lien de téléchargement
+      - name: Afficher le lien
         run: |
           echo ""
-          echo "╔════════════════════════════════════════════════════════╗"
-          echo "║  ✅ PDF GÉNÉRÉ AVEC SUCCÈS                            ║"
-          echo "╠════════════════════════════════════════════════════════╣"
-          echo "║                                                        ║"
-          echo "║  📎 LIEN DE TÉLÉCHARGEMENT :                           ║"
-          echo "║  ${{ steps.release.outputs.url }}"
-          echo "║                                                        ║"
-          echo "║  📄 Fichier : ${{ steps.pdf.outputs.pdf_name }}"
-          echo "║                                                        ║"
-          echo "╚════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "👉 Copie ce lien et envoie-le à ton client par WhatsApp/SMS/email"
-          echo ""
+          echo "╔══════════════════════════════════════════════════════╗"
+          echo "║  ✅ PDF GÉNÉRÉ                                      ║"
+          echo "║  📎 ${{ steps.release.outputs.url }}"
+          echo "╚══════════════════════════════════════════════════════╝"
