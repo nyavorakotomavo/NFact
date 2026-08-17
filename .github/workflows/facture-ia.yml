@@ -9,7 +9,7 @@ on:
         type: string
 
       client_infos:
-        description: "Infos client. Ex: Nom: X; Adresse: Y; Tel: Z; Articles: A x1 à 1000, B x2 à 500; TVA: 20; Devise: Ar"
+        description: "Infos client. Ex: Nom: X; Adresse: Y; Articles: A x1 à 1000; TVA: 20"
         required: true
         type: string
 
@@ -45,47 +45,43 @@ jobs:
           pip install reportlab requests
 
       - name: Créer le dossier de sortie
-        run: |
-          mkdir -p out
+        run: mkdir -p out
 
       - name: Transformer les infos client en JSON avec IA
         env:
           CLIENT_INFOS: ${{ inputs.client_infos }}
           EMAIL_TO: ${{ inputs.email_to }}
-          PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_API_URL: ${{ secrets.AI_API_URL }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
-        run: |
-          python scripts/ai_to_json.py
+        run: python scripts/ai_to_json.py
 
       - name: Générer le PDF
-        run: |
-          python NFact.py --config invoice.json --output-dir out
+        run: python NFact.py --config invoice.json --output-dir out
 
       - name: Validation avant envoi
         env:
           PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
-        run: |
-          python scripts/validate.py invoice.json
-
-      - name: Bloquer si envoi réel sans email
-        if: ${{ !inputs.dry_run && inputs.email_to == '' }}
-        run: |
-          echo "Tu dois renseigner email_to si dry_run=false"
-          exit 1
+        run: python scripts/validate.py invoice.json
 
       - name: Envoyer le PDF par email
-        if: ${{ !inputs.dry_run && inputs.email_to != '' }}
-        env:
-          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
-          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_TO: ${{ inputs.email_to }}
-          CONFIG_PATH: invoice.json
-        run: |
-          python scripts/send_email.py
+        if: ${{ !inputs.dry_run }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp-mail.outlook.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: Votre facture / devis
+          to: ${{ inputs.email_to }}
+          from: ${{ secrets.EMAIL_USER }}
+          body: |
+            Bonjour,
+
+            Veuillez trouver votre document en pièce jointe.
+
+            Merci de votre confiance.
+          attachments: out/
 
       - name: Sauvegarder le PDF
         uses: actions/upload-artifact@v4
