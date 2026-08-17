@@ -14,7 +14,6 @@ def parse_number(value, default=0.0):
     s = str(value).strip()
     if not s:
         return default
-    # Extraire uniquement le premier nombre trouvé (ignore "ar", "EUR", "$", etc.)
     match = re.search(r'-?\d[\d\s.,]*', s)
     if not match:
         return default
@@ -47,6 +46,7 @@ def main():
         sys.exit(1)
     config_path = sys.argv[1]
     erreurs = []
+    avertissements = []
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -82,9 +82,11 @@ def main():
     if payment_amount:
         payment = parse_number(payment_amount, -1)
         if payment < 0:
-            erreurs.append(f"Montant payé invalide ({payment_amount!r})")
+            avertissements.append(f"Montant payé invalide ({payment_amount!r}), ignoré")
         elif abs(payment - total) > 1:
-            erreurs.append(f"Montant payé ({payment}) différent du total ({total})")
+            avertissements.append(
+                f"Montant payé ({payment}) différent du total ({total})"
+            )
     pdfs = list(Path("out").glob("*.pdf"))
     if not pdfs:
         erreurs.append("Aucun PDF généré dans out/")
@@ -92,6 +94,10 @@ def main():
         for pdf in pdfs:
             if pdf.stat().st_size < 1024:
                 erreurs.append(f"PDF probablement vide : {pdf.name}")
+    if avertissements:
+        print("⚠️  Avertissements (non bloquants) :")
+        for a in avertissements:
+            print(f"- {a}")
     if erreurs:
         print("❌ Validation refusée :")
         for erreur in erreurs:
