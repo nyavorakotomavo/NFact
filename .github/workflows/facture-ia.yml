@@ -1,0 +1,94 @@
+name: Facture IA manuelle
+
+on:
+  workflow_dispatch:
+    inputs:
+      email_to:
+        description: "Email du client"
+        required: true
+        type: string
+
+      client_infos:
+        description: "Infos client. Ex: Nom: X; Adresse: Y; Tel: Z; Articles: A x1 à 1000, B x2 à 500; TVA: 20; Devise: Ar"
+        required: true
+        type: string
+
+      payment_amount:
+        description: "Montant payé (optionnel)"
+        required: false
+        type: string
+
+      dry_run:
+        description: "Mode test (génère mais n'envoie pas)"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  generer_facture:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dépendances
+        run: |
+          pip install reportlab requests
+
+      - name: Créer le dossier de sortie
+        run: |
+          mkdir -p out
+
+      - name: Transformer les infos client en JSON avec IA
+        env:
+          CLIENT_INFOS: ${{ inputs.client_infos }}
+          EMAIL_TO: ${{ inputs.email_to }}
+          PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ secrets.AI_API_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+        run: |
+          python scripts/ai_to_json.py
+
+      - name: Générer le PDF
+        run: |
+          python NFact.py --config invoice.json --output-dir out
+
+      - name: Validation avant envoi
+        env:
+          PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
+        run: |
+          python scripts/validate.py invoice.json
+
+      - name: Bloquer si envoi réel sans email
+        if: ${{ !inputs.dry_run && inputs.email_to == '' }}
+        run: |
+          echo "Tu dois renseigner email_to si dry_run=false"
+          exit 1
+
+      - name: Envoyer le PDF par email
+        if: ${{ !inputs.dry_run && inputs.email_to != '' }}
+        env:
+          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
+          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ inputs.email_to }}
+          CONFIG_PATH: invoice.json
+        run: |
+          python scripts/send_email.py
+
+      - name: Sauvegarder le PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: facture-pdf
+          path: out/*.pdf
