@@ -3,6 +3,7 @@
 
 import os
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -13,7 +14,12 @@ def parse_number(value, default=0.0):
     s = str(value).strip()
     if not s:
         return default
-    s = s.replace(" ", "").replace(",", ".").replace("%", "")
+    # Extraire uniquement le premier nombre trouvé (ignore "ar", "EUR", "$", etc.)
+    match = re.search(r'-?\d[\d\s.,]*', s)
+    if not match:
+        return default
+    s = match.group(0)
+    s = s.replace(" ", "").replace("\u00a0", "").replace(",", ".")
     try:
         return float(s)
     except Exception:
@@ -76,7 +82,7 @@ def main():
     if payment_amount:
         payment = parse_number(payment_amount, -1)
         if payment < 0:
-            erreurs.append("Montant payé invalide")
+            erreurs.append(f"Montant payé invalide ({payment_amount!r})")
         elif abs(payment - total) > 1:
             erreurs.append(f"Montant payé ({payment}) différent du total ({total})")
     pdfs = list(Path("out").glob("*.pdf"))
