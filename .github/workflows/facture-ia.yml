@@ -9,13 +9,52 @@ on:
         type: string
 
       client_infos:
-        description: "Infos client. Ex: Nom: X; Adresse: Y; Articles: A x1 à 1000; TVA: 20"
+        description: "Message brut du client (coller ici)"
         required: true
         type: string
 
       payment_amount:
-        description: "Montant payé (optionnel)"
+        description: "Montant payé (ex: 300000)"
         required: false
+        type: string
+
+      style:
+        description: "Style visuel du PDF"
+        required: true
+        type: choice
+        options:
+          - stripe
+          - quickbooks
+          - freshbooks_simple
+          - freshbooks_modern
+          - wave
+          - square
+          - canva_minimal
+          - canva_geometric
+          - classique
+          - creatif
+        default: stripe
+
+      couleur_accent:
+        description: "Couleur principale (ex: #2E5CFF)"
+        required: false
+        default: "#2E5CFF"
+        type: string
+
+      taille_papier:
+        description: "Format du papier"
+        required: true
+        type: choice
+        options:
+          - A4
+          - LETTER
+          - A5
+        default: A4
+
+      logo:
+        description: "Nom du fichier logo dans logos/ (ex: logo.png) ou URL"
+        required: false
+        default: ""
         type: string
 
       dry_run:
@@ -41,16 +80,40 @@ jobs:
           python-version: "3.11"
 
       - name: Installer les dépendances
-        run: |
-          pip install reportlab requests
+        run: pip install reportlab requests
 
       - name: Créer le dossier de sortie
         run: mkdir -p out
+
+      - name: Télécharger le logo si URL
+        if: ${{ inputs.logo != '' && startsWith(inputs.logo, 'http') }}
+        run: |
+          mkdir -p logos
+          curl -sL "${{ inputs.logo }}" -o logos/logo_download.png
+          echo "LOGO_PATH=logos/logo_download.png" >> "$GITHUB_ENV"
+
+      - name: Utiliser le logo du repo
+        if: ${{ inputs.logo != '' && !startsWith(inputs.logo, 'http') }}
+        run: |
+          if [ -f "logos/${{ inputs.logo }}" ]; then
+            echo "LOGO_PATH=logos/${{ inputs.logo }}" >> "$GITHUB_ENV"
+          else
+            echo "⚠️ Logo introuvable : logos/${{ inputs.logo }}"
+            echo "LOGO_PATH=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pas de logo
+        if: ${{ inputs.logo == '' }}
+        run: echo "LOGO_PATH=" >> "$GITHUB_ENV"
 
       - name: Transformer les infos client en JSON avec IA
         env:
           CLIENT_INFOS: ${{ inputs.client_infos }}
           EMAIL_TO: ${{ inputs.email_to }}
+          STYLE: ${{ inputs.style }}
+          COULEUR_ACCENT: ${{ inputs.couleur_accent }}
+          TAILLE_PAPIER: ${{ inputs.taille_papier }}
+          LOGO_PATH: ${{ env.LOGO_PATH }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_API_URL: ${{ secrets.AI_API_URL }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
@@ -63,6 +126,12 @@ jobs:
         env:
           PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
         run: python scripts/validate.py invoice.json
+
+      - name: Bloquer si envoi réel sans email
+        if: ${{ !inputs.dry_run && inputs.email_to == '' }}
+        run: |
+          echo "Tu dois renseigner email_to si dry_run=false"
+          exit 1
 
       - name: Envoyer le PDF par email
         if: ${{ !inputs.dry_run }}
