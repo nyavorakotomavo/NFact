@@ -1,0 +1,39 @@
+#!/bin/bash
+# Commande rapide pour générer des factures
+
+cd ~/NFact || exit 1
+
+if [ "$1" = "--list" ] || [ "$1" = "-l" ]; then
+    python3 NFact.py --list
+    exit 0
+fi
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Usage :"
+    echo "  fact                           → Mode interactif"
+    echo "  fact --list                    → Liste des clients"
+    echo "  fact client1                   → Facture pour client pré-enregistré"
+    echo "  fact client1 --type DEVIS      → Devis pour client pré-enregistré"
+    echo "  fact --new client1             → Créer un nouveau client"
+    exit 0
+fi
+
+if [ "$1" = "--new" ] && [ -n "$2" ]; then
+    echo "Création d'un nouveau client : $2"
+    python3 NFact.py
+    exit 0
+fi
+
+if [ -n "$1" ] && [ "$1" != "--"* ]; then
+    # Premier argument = nom de client
+    if [ -f "clients/$1.json" ]; then
+        shift
+        python3 NFact.py --config "$1" "$@"
+    else
+        echo "❌ Client '$1' introuvable dans clients/"
+        echo "   Liste : fact --list"
+        exit 1
+    fi
+else
+    python3 NFact.py "$@"
+fi
