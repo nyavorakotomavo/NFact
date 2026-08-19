@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Extrait les infos du vendeur ET du client depuis deux messages bruts.
-Aucun fichier pré-créé nécessaire.
+Extrait vendeur + client depuis messages bruts via Mistral IA.
+Lit la config depuis config/ia.json automatiquement.
 """
 
 import os
@@ -44,22 +44,41 @@ def extract_json(text):
     return None
 
 
-def call_ai(seller_raw, client_raw):
-    api_key = os.getenv("AI_API_KEY")
-    url = os.getenv("AI_API_URL", "")
-    model = os.getenv("AI_MODEL", "")
-
-    if not api_key or not url or not model:
-        print("❌ IA non configurée. Ajoute les secrets AI_API_KEY, AI_API_URL, AI_MODEL.")
+def load_ia_config():
+    """Charge la config IA depuis config/ia.json"""
+    config_path = Path("config/ia.json")
+    if not config_path.is_file():
+        print("❌ Fichier config/ia.json introuvable")
+        print("💡 Crée-le avec ta clé Mistral :")
+        print('   {"api_key": "ta_cle", "api_url": "https://api.mistral.ai/v1/chat/completions", "model": "mistral-small-latest"}')
         sys.exit(1)
+    
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"❌ config/ia.json invalide : {e}")
+        sys.exit(1)
+    
+    if not config.get("api_key") or config["api_key"] == "METS_TA_CLE_MISTRAL_ICI":
+        print("❌ Clé API manquante dans config/ia.json")
+        print("💡 Remplace METS_TA_CLE_MISTRAL_ICI par ta vraie clé Mistral")
+        sys.exit(1)
+    
+    return config
+
+
+def call_ai(seller_raw, client_raw, ia_config):
+    api_key = ia_config["api_key"]
+    url = ia_config.get("api_url", "https://api.mistral.ai/v1/chat/completions")
+    model = ia_config.get("model", "mistral-small-latest")
 
     print(f"🤖 Appel IA : {model}")
 
     system_prompt = """Tu es un expert en extraction d'informations de facturation.
 Tu vas recevoir DEUX messages :
 
-1. SELLER_INFOS : les informations du VENDEUR (celui qui émet la facture, l'entreprise qui vend)
-2. CLIENT_INFOS : le message du CLIENT (celui qui reçoit la facture, celui qui paie) avec sa demande
+1. SELLER_INFOS : les informations du VENDEUR (celui qui émet la facture)
+2. CLIENT_INFOS : le message du CLIENT (celui qui reçoit la facture) avec sa demande
 
 Extrais les informations et retourne UNIQUEMENT un JSON valide, sans markdown.
 
@@ -97,7 +116,7 @@ RÈGLES CRITIQUES :
 - N'inclus JAMAIS de texte conversationnel dans les articles
 - Si "3 mois de maintenance à 150 000 Ar le mois" → quantite=3, prix_unitaire=150000
 - Devise par défaut : "Ar"
-- Type par défaut : "FACTURE" (sauf si le client demande explicitement un devis)
+- Type par défaut : "FACTURE"
 - N'invente JAMAIS d'informations absentes des messages"""
 
     user_message = f"""SELLER_INFOS :
@@ -214,8 +233,11 @@ def main():
     print(client_raw[:300])
     print("-" * 60)
 
+    # Charger config IA
+    ia_config = load_ia_config()
+
     # Appeler l'IA
-    ai_result = call_ai(seller_raw, client_raw)
+    ai_result = call_ai(seller_raw, client_raw, ia_config)
 
     # Extraire vendeur
     vendeur = {
@@ -234,11 +256,9 @@ def main():
             "logo": ""
         }
 
-    # Appliquer le logo si fourni
     if logo_path and Path(logo_path).is_file():
         vendeur["logo"] = logo_path
 
-    # Extraire client
     client = {"nom": "", "adresse": "", "telephone": "", "email": ""}
     if isinstance(ai_result.get("client"), dict):
         c = ai_result["client"]
@@ -249,10 +269,8 @@ def main():
             "email": str(c.get("email", "")).strip()
         }
 
-    # Extraire articles
     articles = sanitize_articles(ai_result.get("articles"))
 
-    # Autres champs
     type_doc = str(ai_result.get("type_document", "FACTURE")).upper()
     devise = str(ai_result.get("devise", "Ar"))
     tva = parse_number(ai_result.get("tva_pourcentage"), 0)
@@ -260,14 +278,13 @@ def main():
     remise_montant = parse_number(ai_result.get("remise_montant"), 0)
     conditions = str(ai_result.get("conditions_paiement", "") or "Paiement à réception de facture.")
 
-    # Validation
     erreurs = []
     if not vendeur.get("nom"):
-        erreurs.append("Nom du vendeur introuvable dans le message vendeur")
+        erreurs.append("Nom du vendeur introuvable")
     if not client.get("nom"):
-        erreurs.append("Nom du client introuvable dans le message client")
+        erreurs.append("Nom du client introuvable")
     if not articles:
-        erreurs.append("Aucun article valide extrait du message client")
+        erreurs.append("Aucun article valide extrait")
 
     if erreurs:
         print("❌ Extraction incomplète :")
@@ -275,7 +292,6 @@ def main():
             print(f"  - {e}")
         sys.exit(1)
 
-    # Valider couleur
     try:
         from reportlab.lib import colors as rl_colors
         rl_colors.HexColor(couleur_accent)
@@ -313,20 +329,11 @@ def main():
     print("✅ invoice.json créé avec succès !")
     print("=" * 60)
     print(f"🏢 Vendeur   : {vendeur.get('nom')}")
-    print(f"   Adresse   : {vendeur.get('adresse') or '(non renseignée)'}")
-    print(f"   Tél       : {vendeur.get('telephone') or '-'}")
-    print(f"   Email     : {vendeur.get('email') or '-'}")
     print(f"👤 Client    : {client.get('nom')}")
-    print(f"   Adresse   : {client.get('adresse') or '(non renseignée)'}")
-    print(f"📋 Type      : {invoice['type_document']}")
-    print(f"💰 Devise    : {devise}")
-    print(f"🎨 Style     : {style}")
     print(f"📦 Articles  : {len(articles)}")
     for i, art in enumerate(articles, 1):
         print(f"   {i}. {art['designation']} x{art['quantite']} @ {art['prix_unitaire']}")
     print(f"📊 TVA       : {tva}%")
-    if remise_pct > 0:
-        print(f"🏷️  Remise   : {remise_pct}%")
     print("=" * 60)
 
 

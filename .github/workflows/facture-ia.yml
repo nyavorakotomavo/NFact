@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       seller_infos:
-        description: "Infos du vendeur (coller le message du vendeur)"
+        description: "Infos du vendeur"
         required: true
         type: string
 
       client_infos:
-        description: "Message du client (coller ici)"
+        description: "Message du client"
         required: true
         type: string
 
@@ -28,12 +28,12 @@ on:
           - canva_geometric
           - classique
           - creatif
-        default: stripe
+        default: freshbooks_modern
 
       couleur_accent:
-        description: "Couleur principale (ex: #2E5CFF)"
+        description: "Couleur principale"
         required: false
-        default: "#2E5CFF"
+        default: "#00A8E1"
         type: string
 
       taille_papier:
@@ -71,8 +71,20 @@ jobs:
       - name: Installer les dépendances
         run: pip install reportlab requests
 
-      - name: Créer le dossier de sortie
-        run: mkdir -p out
+      - name: Créer les dossiers
+        run: mkdir -p out config
+
+      - name: Créer le fichier IA depuis le secret
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          cat > config/ia.json <<IAEOF
+          {
+            "api_key": "${MISTRAL_API_KEY}",
+            "api_url": "https://api.mistral.ai/v1/chat/completions",
+            "model": "mistral-small-latest"
+          }
+          IAEOF
 
       - name: Télécharger le logo si URL
         if: ${{ inputs.logo != '' }}
@@ -80,10 +92,6 @@ jobs:
           mkdir -p logos
           curl -sL "${{ inputs.logo }}" -o logos/logo_download.png
           echo "LOGO_PATH=logos/logo_download.png" >> "$GITHUB_ENV"
-
-      - name: Pas de logo
-        if: ${{ inputs.logo == '' }}
-        run: echo "LOGO_PATH=" >> "$GITHUB_ENV"
 
       - name: Extraire vendeur + client avec IA
         env:
@@ -93,9 +101,6 @@ jobs:
           COULEUR_ACCENT: ${{ inputs.couleur_accent }}
           TAILLE_PAPIER: ${{ inputs.taille_papier }}
           LOGO_PATH: ${{ env.LOGO_PATH }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          AI_API_URL: ${{ secrets.AI_API_URL }}
-          AI_MODEL: ${{ secrets.AI_MODEL }}
         run: python scripts/ai_to_json.py
 
       - name: Générer le PDF
