@@ -179,7 +179,9 @@ def generer_pdf(config, chemin_sortie):
 
     s_titre = ParagraphStyle("T", parent=styles_rl["Title"], textColor=c_accent_principal,
                              fontName=style.police_titre,
-                             fontSize=style.taille_titre, alignment=TA_RIGHT, spaceAfter=2)
+                             fontSize=style.taille_titre, alignment=TA_RIGHT,
+                             leading=style.taille_titre * 1.15,
+                             spaceAfter=max(4, style.taille_titre * 0.25))
     s_norm_d = ParagraphStyle("ND", parent=styles_rl["Normal"],
                               fontName=style.police_normale,
                               alignment=TA_RIGHT, textColor=c_texte)
