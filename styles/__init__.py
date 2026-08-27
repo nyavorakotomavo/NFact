@@ -14,3 +14,5 @@ from . import stripe         # noqa: F401,E402
 from . import quickbooks     # noqa: F401,E402
 from . import freshbooks_modern  # noqa: F401,E402
 from . import violet         # noqa: F401,E402
+from . import proforma_mono  # noqa: F401,E402
+from . import elegant_serif  # noqa: F401,E402
