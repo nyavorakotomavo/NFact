@@ -70,6 +70,23 @@ jobs:
             echo "--- (fin aperçu, taille totale: $(wc -l < "$f") lignes) ---"
             echo ""
           done
+      - name: Vérifier le style demandé
+        run: |
+          python3 -c "
+          import sys
+          sys.path.insert(0, '.')
+          from styles import liste_styles
+          styles_dispo = liste_styles()
+          style_demande = '${{ inputs.style }}'.strip()
+          print('📋 Styles disponibles :', ', '.join(styles_dispo))
+          if not style_demande:
+              print('❌ Aucun style spécifié.')
+              sys.exit(1)
+          if style_demande not in styles_dispo:
+              print(f'❌ Style \"{style_demande}\" introuvable.')
+              sys.exit(1)
+          print(f'✅ Style \"{style_demande}\" valide.')
+          "
       - name: Extraction IA → invoice.json
         env:
           SELLER_INFOS: ${{ inputs.seller_infos }}
