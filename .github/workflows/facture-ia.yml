@@ -7,35 +7,25 @@ on:
         description: "Infos du vendeur"
         required: true
         type: string
-
       client_infos:
         description: "Message du client"
         required: true
         type: string
-
       style:
         description: "Style visuel du PDF"
         required: true
         type: choice
         options:
+          - classique
           - stripe
           - quickbooks
-          - freshbooks_simple
           - freshbooks_modern
-          - wave
-          - square
-          - canva_minimal
-          - canva_geometric
-          - classique
-          - creatif
-        default: freshbooks_modern
-
+          - violet
+        default: classique
       couleur_accent:
-        description: "Couleur principale"
+        description: "Couleur(s) principale(s) — une seule (#7C3AED) ou plusieurs séparées par virgules (#7C3AED,#9333EA,#A78BFA) pour un dégradé"
         required: false
-        default: "#00A8E1"
         type: string
-
       taille_papier:
         description: "Format du papier"
         required: true
@@ -45,98 +35,62 @@ on:
           - LETTER
           - A5
         default: A4
-
-      logo:
+      logo_url:
         description: "URL du logo du vendeur (optionnel)"
         required: false
-        default: ""
+        type: string
+      payment_amount:
+        description: "Montant déjà payé (optionnel, pour vérification)"
+        required: false
         type: string
 
-permissions:
-  contents: write
-
 jobs:
-  generer_facture:
+  generer-facture:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Récupérer le projet
+      - name: Checkout du dépôt
         uses: actions/checkout@v4
 
-      - name: Installer Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Installer les dépendances
-        run: pip install reportlab requests
-
-      - name: Créer les dossiers
-        run: mkdir -p out config
-
-      - name: Créer le fichier IA depuis le secret
-        env:
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
-          cat > config/ia.json <<IAEOF
-          {
-            "api_key": "${MISTRAL_API_KEY}",
-            "api_url": "https://api.mistral.ai/v1/chat/completions",
-            "model": "mistral-small-latest"
-          }
-          IAEOF
+          pip install reportlab requests
 
-      - name: Télécharger le logo si URL
-        if: ${{ inputs.logo != '' }}
+      - name: Télécharger le logo (si fourni)
+        if: ${{ inputs.logo_url != '' }}
         run: |
-          mkdir -p logos
-          curl -sL "${{ inputs.logo }}" -o logos/logo_download.png
-          echo "LOGO_PATH=logos/logo_download.png" >> "$GITHUB_ENV"
+          mkdir -p logos/tmp
+          curl -L -o logos/tmp/logo_vendeur.png "${{ inputs.logo_url }}"
 
-      - name: Extraire vendeur + client avec IA
+      - name: Extraction IA → invoice.json
         env:
           SELLER_INFOS: ${{ inputs.seller_infos }}
           CLIENT_INFOS: ${{ inputs.client_infos }}
           STYLE: ${{ inputs.style }}
           COULEUR_ACCENT: ${{ inputs.couleur_accent }}
           TAILLE_PAPIER: ${{ inputs.taille_papier }}
-          LOGO_PATH: ${{ env.LOGO_PATH }}
-        run: python scripts/ai_to_json.py
+          LOGO_PATH: ${{ inputs.logo_url != '' && 'logos/tmp/logo_vendeur.png' || '' }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          python scripts/ai_to_json.py
 
-      - name: Générer le PDF
-        run: python NFact.py --config invoice.json --output-dir out
+      - name: Génération du PDF
+        run: |
+          python NFact.py --config invoice.json --output-dir out
 
       - name: Validation avant envoi
+        env:
+          PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
         run: python scripts/validate.py invoice.json
 
-      - name: Obtenir le nom du PDF
-        id: pdf
-        run: |
-          PDF_FILE=$(ls out/*.pdf | head -n1)
-          PDF_NAME=$(basename "$PDF_FILE")
-          echo "pdf_path=$PDF_FILE" >> "$GITHUB_OUTPUT"
-          echo "pdf_name=$PDF_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Créer une release avec le PDF
-        id: release
-        uses: softprops/action-gh-release@v2
+      - name: Upload de la facture générée
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: facture-${{ github.run_number }}
-          name: "Facture ${{ github.run_number }}"
-          body: |
-            📄 **Fichier** : ${{ steps.pdf.outputs.pdf_name }}
-            
-            Cliquez sur le fichier ci-dessous pour le télécharger.
-          files: ${{ steps.pdf.outputs.pdf_path }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Afficher le lien
-        run: |
-          echo ""
-          echo "╔══════════════════════════════════════════════════════╗"
-          echo "║  ✅ PDF GÉNÉRÉ                                      ║"
-          echo "║  📎 ${{ steps.release.outputs.url }}"
-          echo "╚══════════════════════════════════════════════════════╝"
+          name: facture-pdf
+          path: out/*.pdf
+          retention-days: 30
