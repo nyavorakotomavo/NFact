@@ -17,12 +17,12 @@ on:
         type: choice
         options:
           - classique
-          - stripe
-          - quickbooks
-          - freshbooks_modern
-          - violet
-          - proforma_mono
           - elegant_serif
+          - freshbooks_modern
+          - proforma_mono
+          - quickbooks
+          - stripe
+          - violet
         default: classique
       couleur_accent:
         description: "Couleur(s) principale(s) — une seule (#7C3AED) ou plusieurs séparées par virgules (#7C3AED,#9333EA,#A78BFA) pour un dégradé"
