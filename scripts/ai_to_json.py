@@ -63,12 +63,22 @@ def extract_json(text):
 
 
 def load_ia_config():
-    """Charge la config IA depuis config/ia.json"""
+    """Charge la config IA. Priorité : variable d'environnement MISTRAL_API_KEY
+    (secret GitHub Actions), sinon config/ia.json en repli pour usage local/Termux."""
+    env_key = os.getenv("MISTRAL_API_KEY", "").strip()
+    if env_key:
+        return {
+            "api_key": env_key,
+            "api_url": os.getenv("MISTRAL_API_URL", "https://api.mistral.ai/v1/chat/completions"),
+            "model": os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
+        }
+
     config_path = Path("config/ia.json")
     if not config_path.is_file():
-        print("❌ Fichier config/ia.json introuvable")
-        print("💡 Crée-le avec ta clé Mistral :")
+        print("❌ Ni MISTRAL_API_KEY (env) ni config/ia.json trouvés")
+        print("💡 En local/Termux, crée config/ia.json avec ta clé Mistral :")
         print('   {"api_key": "ta_cle", "api_url": "https://api.mistral.ai/v1/chat/completions", "model": "mistral-small-latest"}')
+        print("💡 Sur GitHub Actions, ajoute le secret MISTRAL_API_KEY (Settings > Secrets)")
         sys.exit(1)
 
     try:
