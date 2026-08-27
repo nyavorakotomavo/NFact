@@ -12,9 +12,18 @@ on:
         required: true
         type: string
       style:
-        description: "Style visuel du PDF (laisse vide pour voir la liste disponible)"
-        required: false
-        type: string
+        description: "Style visuel du PDF"
+        required: true
+        type: choice
+        options:
+          - classique
+          - stripe
+          - quickbooks
+          - freshbooks_modern
+          - violet
+          - proforma_mono
+          - elegant_serif
+        default: classique
       couleur_accent:
         description: "Couleur(s) principale(s) — une seule (#7C3AED) ou plusieurs séparées par virgules (#7C3AED,#9333EA,#A78BFA) pour un dégradé"
         required: false
@@ -36,6 +45,9 @@ on:
         description: "Montant déjà payé (optionnel, pour vérification)"
         required: false
         type: string
+
+permissions:
+  contents: write
 
 jobs:
   generer-facture:
@@ -59,34 +71,7 @@ jobs:
         run: |
           mkdir -p logos/tmp
           curl -L -o logos/tmp/logo_vendeur.png "${{ inputs.logo_url }}"
-      - name: Debug - contenu réel des fichiers styles
-        run: |
-          echo "=== Arborescence styles/ ==="
-          ls -la styles/
-          echo ""
-          for f in styles/*.py; do
-            echo "=== $f ==="
-            cat -A "$f" | head -5
-            echo "--- (fin aperçu, taille totale: $(wc -l < "$f") lignes) ---"
-            echo ""
-          done
-      - name: Vérifier le style demandé
-        run: |
-          python3 -c "
-          import sys
-          sys.path.insert(0, '.')
-          from styles import liste_styles
-          styles_dispo = liste_styles()
-          style_demande = '${{ inputs.style }}'.strip()
-          print('📋 Styles disponibles :', ', '.join(styles_dispo))
-          if not style_demande:
-              print('❌ Aucun style spécifié.')
-              sys.exit(1)
-          if style_demande not in styles_dispo:
-              print(f'❌ Style \"{style_demande}\" introuvable.')
-              sys.exit(1)
-          print(f'✅ Style \"{style_demande}\" valide.')
-          "
+
       - name: Extraction IA → invoice.json
         env:
           SELLER_INFOS: ${{ inputs.seller_infos }}
@@ -108,9 +93,17 @@ jobs:
           PAYMENT_AMOUNT: ${{ inputs.payment_amount }}
         run: python scripts/validate.py invoice.json
 
-      - name: Upload de la facture générée
+      - name: Upload de la facture générée (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: facture-pdf
           path: out/*.pdf
           retention-days: 30
+
+      - name: Publier en Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: facture-${{ github.run_number }}
+          name: "Facture ${{ github.run_number }} — ${{ inputs.style }}"
+          files: out/*.pdf
+          generate_release_notes: false
