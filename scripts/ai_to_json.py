@@ -28,6 +28,24 @@ def parse_number(value, default=0.0):
         return default
 
 
+def parse_couleurs(value):
+    """Accepte '#7C3AED' ou '#7C3AED,#9333EA,#A78BFA' → liste de hex valides."""
+    if not value:
+        return []
+    from reportlab.lib import colors as rl_colors
+    result = []
+    for part in str(value).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            rl_colors.HexColor(part)
+            result.append(part)
+        except Exception:
+            print(f"  ⚠️  Couleur ignorée (invalide) : {part}")
+    return result
+
+
 def extract_json(text):
     if not text:
         return None
@@ -52,18 +70,18 @@ def load_ia_config():
         print("💡 Crée-le avec ta clé Mistral :")
         print('   {"api_key": "ta_cle", "api_url": "https://api.mistral.ai/v1/chat/completions", "model": "mistral-small-latest"}')
         sys.exit(1)
-    
+
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"❌ config/ia.json invalide : {e}")
         sys.exit(1)
-    
+
     if not config.get("api_key") or config["api_key"] == "METS_TA_CLE_MISTRAL_ICI":
         print("❌ Clé API manquante dans config/ia.json")
         print("💡 Remplace METS_TA_CLE_MISTRAL_ICI par ta vraie clé Mistral")
         sys.exit(1)
-    
+
     return config
 
 
@@ -141,7 +159,18 @@ CLIENT_INFOS :
 
     try:
         import requests
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        retries = Retry(
+            total=2,
+            backoff_factor=2,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+
+        resp = session.post(url, headers=headers, json=payload, timeout=120)
         print(f"📡 Réponse HTTP : {resp.status_code}")
         if resp.status_code != 200:
             print(f"❌ Erreur API : {resp.text[:300]}")
@@ -153,8 +182,11 @@ CLIENT_INFOS :
             print(f"   Réponse brute : {content[:200]}")
             sys.exit(1)
         return result
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"❌ Exception IA : {e}")
+        print("💡 Si c'est un timeout, relance le workflow — souvent transitoire côté Mistral")
         sys.exit(1)
 
 
@@ -211,8 +243,8 @@ def sanitize_articles(articles):
 def main():
     seller_raw = os.getenv("SELLER_INFOS", "")
     client_raw = os.getenv("CLIENT_INFOS", "")
-    style = os.getenv("STYLE", "stripe")
-    couleur_accent = os.getenv("COULEUR_ACCENT", "#2E5CFF")
+    style = os.getenv("STYLE", "classique")
+    couleur_accent_raw = os.getenv("COULEUR_ACCENT", "")
     taille_papier = os.getenv("TAILLE_PAPIER", "A4")
     logo_path = os.getenv("LOGO_PATH", "")
 
@@ -233,13 +265,9 @@ def main():
     print(client_raw[:300])
     print("-" * 60)
 
-    # Charger config IA
     ia_config = load_ia_config()
-
-    # Appeler l'IA
     ai_result = call_ai(seller_raw, client_raw, ia_config)
 
-    # Extraire vendeur
     vendeur = {
         "nom": "", "adresse": "", "telephone": "",
         "email": "", "nif": "", "stat": "", "logo": ""
@@ -292,11 +320,9 @@ def main():
             print(f"  - {e}")
         sys.exit(1)
 
-    try:
-        from reportlab.lib import colors as rl_colors
-        rl_colors.HexColor(couleur_accent)
-    except Exception:
-        couleur_accent = "#2E5CFF"
+    # Une ou plusieurs couleurs (dégradé) — la validation se fait dans parse_couleurs
+    couleurs = parse_couleurs(couleur_accent_raw)
+    couleur_accent = couleurs if len(couleurs) > 1 else (couleurs[0] if couleurs else None)
 
     if taille_papier.upper() not in ("A4", "LETTER", "A5"):
         taille_papier = "A4"
@@ -315,8 +341,8 @@ def main():
         "remise_montant": remise_montant,
         "conditions_paiement": conditions,
         "mentions_legales": "",
-        "couleur_texte": "#000000",
-        "couleur_fond_alternee": "#f5f5f5",
+        "couleur_texte": None,
+        "couleur_fond_alternee": None,
         "dossier_sortie": "out"
     }
 
@@ -330,6 +356,8 @@ def main():
     print("=" * 60)
     print(f"🏢 Vendeur   : {vendeur.get('nom')}")
     print(f"👤 Client    : {client.get('nom')}")
+    print(f"🎨 Style     : {style}")
+    print(f"🎨 Couleurs  : {couleur_accent}")
     print(f"📦 Articles  : {len(articles)}")
     for i, art in enumerate(articles, 1):
         print(f"   {i}. {art['designation']} x{art['quantite']} @ {art['prix_unitaire']}")
