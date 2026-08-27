@@ -5,6 +5,9 @@ Usage:
     python NFact.py                              → mode interactif
     python NFact.py --config client.json         → depuis un JSON
     python NFact.py --list                       → liste des clients
+
+La logique de rendu est ici. La présentation (couleurs, polices, layout)
+vit dans le package styles/ — voir styles/base.py pour ajouter un style.
 """
 import json
 import os
@@ -17,11 +20,14 @@ from reportlab.lib.pagesizes import A4, letter, A5
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_RIGHT, TA_LEFT
+from reportlab.lib.enums import TA_RIGHT
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
     Image as RLImage,
 )
+
+from styles import get_style
+from styles.gradient import GradientBar, couleurs_par_colonne, interpolate_colors
 
 # Emplacements
 PROJECT_DIR = Path(__file__).parent.resolve()
@@ -32,6 +38,7 @@ DEFAULT_OUTPUT = PROJECT_DIR / "output"
 DEFAULT_CONFIG = {
     "type_document": "FACTURE",
     "devise": "Ar",
+    "style": "classique",
     "vendeur": {
         "nom": "Mon Entreprise",
         "adresse": "",
@@ -48,9 +55,9 @@ DEFAULT_CONFIG = {
     "remise_montant": 0,
     "conditions_paiement": "Paiement à réception de facture.",
     "mentions_legales": "",
-    "couleur_accent": "#1a3c6e",
-    "couleur_texte": "#000000",
-    "couleur_fond_alternee": "#f5f5f5",
+    "couleur_accent": None,   # None = utilise les couleurs par défaut du style
+    "couleur_texte": None,
+    "couleur_fond_alternee": None,
     "taille_papier": "A4",
 }
 
@@ -65,6 +72,19 @@ def deep_merge(default, override):
         else:
             result[k] = v
     return result
+
+
+def parse_couleurs(value):
+    """Normalise couleur_accent en liste de hex.
+    Accepte None, une string unique, une string 'a,b,c', ou déjà une liste."""
+    if not value:
+        return None
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        return parts or None
+    return None
 
 
 def prochain_numero(prefixe="FAC"):
@@ -134,9 +154,16 @@ def hex_color(v, defaut):
 
 def generer_pdf(config, chemin_sortie):
     devise = config.get("devise", "Ar")
-    c_accent = hex_color(config.get("couleur_accent", "#1a3c6e"), "#1a3c6e")
-    c_texte = hex_color(config.get("couleur_texte", "#000000"), "#000000")
-    c_fond = hex_color(config.get("couleur_fond_alternee", "#f5f5f5"), "#f5f5f5")
+
+    # --- Résolution du style ---
+    couleurs_override = parse_couleurs(config.get("couleur_accent"))
+    style = get_style(config.get("style", "classique"), couleurs_override)
+
+    c_accent_principal = hex_color(style.couleurs_accent[0], "#1a3c6e")
+    c_accent_final = hex_color(style.couleurs_accent[-1], style.couleurs_accent[0])
+    c_texte = hex_color(config.get("couleur_texte") or style.couleur_texte, "#000000")
+    c_fond = hex_color(config.get("couleur_fond_alternee") or style.couleur_fond_alternee, "#f5f5f5")
+
     papier = str(config.get("taille_papier", "A4")).upper()
     taille = PAPIER.get(papier, A4)
     totaux = calculer_totaux(config)
@@ -148,23 +175,30 @@ def generer_pdf(config, chemin_sortie):
         leftMargin=marge, rightMargin=marge,
     )
     largeur = taille[0] - 2 * marge
-    styles = getSampleStyleSheet()
+    styles_rl = getSampleStyleSheet()
 
-    s_titre = ParagraphStyle("T", parent=styles["Title"], textColor=c_accent,
-                             fontSize=22, alignment=TA_RIGHT, spaceAfter=2)
-    s_norm_d = ParagraphStyle("ND", parent=styles["Normal"],
+    s_titre = ParagraphStyle("T", parent=styles_rl["Title"], textColor=c_accent_principal,
+                             fontName=style.police_titre,
+                             fontSize=style.taille_titre, alignment=TA_RIGHT, spaceAfter=2)
+    s_norm_d = ParagraphStyle("ND", parent=styles_rl["Normal"],
+                              fontName=style.police_normale,
                               alignment=TA_RIGHT, textColor=c_texte)
-    s_norm = ParagraphStyle("N", parent=styles["Normal"], textColor=c_texte)
-    s_sec = ParagraphStyle("S", parent=styles["Normal"], fontSize=10,
+    s_norm = ParagraphStyle("N", parent=styles_rl["Normal"],
+                            fontName=style.police_normale, textColor=c_texte)
+    s_sec = ParagraphStyle("S", parent=styles_rl["Normal"], fontSize=10,
                            textColor=colors.grey, fontName="Helvetica-Bold", spaceAfter=4)
-    s_petit = ParagraphStyle("P", parent=styles["Normal"],
+    s_petit = ParagraphStyle("P", parent=styles_rl["Normal"],
                              fontSize=8, textColor=colors.grey)
 
     story = []
     vendeur = config["vendeur"]
     logo = vendeur.get("logo", "")
 
-    # En-tête
+    # --- Variante de layout d'en-tête (définie par le style, pas par son nom) ---
+    if style.en_tete_style == "bande_couleur":
+        story.append(GradientBar(largeur, 4 * mm, style.couleurs_accent))
+        story.append(Spacer(1, 6 * mm))
+
     gauche = []
     if logo and os.path.isfile(logo):
         try:
@@ -175,8 +209,7 @@ def generer_pdf(config, chemin_sortie):
     for c, l in [("adresse", ""), ("telephone", "Tél: "), ("email", ""),
                  ("nif", "NIF: "), ("stat", "STAT: ")]:
         if vendeur.get(c):
-            prefix = l
-            infos_v += f"{prefix}{vendeur[c]}<br/>"
+            infos_v += f"{l}{vendeur[c]}<br/>"
     gauche.append(Paragraph(infos_v, s_norm))
 
     type_doc = config.get("type_document", "FACTURE").upper()
@@ -208,7 +241,7 @@ def generer_pdf(config, chemin_sortie):
     story.append(Paragraph(infos_c, s_norm))
     story.append(Spacer(1, 8 * mm))
 
-    # Articles
+    # --- Tableau articles ---
     data_t = [["Désignation", "Qté", "Prix Unit.", "Total"]]
     for l in totaux["lignes"]:
         data_t.append([
@@ -219,8 +252,8 @@ def generer_pdf(config, chemin_sortie):
         ])
     t_art = Table(data_t, colWidths=[largeur * 0.44, largeur * 0.13,
                                       largeur * 0.215, largeur * 0.215])
-    t_art.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), c_accent),
+
+    style_cmds = [
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
@@ -232,11 +265,22 @@ def generer_pdf(config, chemin_sortie):
         ("TEXTCOLOR", (0, 1), (-1, -1), c_texte),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
+    ]
+
+    # En-tête du tableau : dégradé si le style le prévoit et qu'on a plusieurs
+    # couleurs, sinon couleur unie
+    if style.tableau_entete_degrade and len(style.couleurs_accent) > 1:
+        couleurs_col = couleurs_par_colonne(style.couleurs_accent, 4)
+        for i, col in enumerate(couleurs_col):
+            style_cmds.append(("BACKGROUND", (i, 0), (i, 0), col))
+    else:
+        style_cmds.append(("BACKGROUND", (0, 0), (-1, 0), c_accent_principal))
+
+    t_art.setStyle(TableStyle(style_cmds))
     story.append(t_art)
     story.append(Spacer(1, 6 * mm))
 
-    # Totaux
+    # --- Totaux ---
     lignes_t = [["Sous-total", formater(totaux["sous_total"], devise)]]
     if totaux["remise_totale"] > 0:
         lignes_t.append(["Remise", "- " + formater(totaux["remise_totale"], devise)])
@@ -244,16 +288,18 @@ def generer_pdf(config, chemin_sortie):
         lignes_t.append([f"TVA ({totaux['tva_pct']:g}%)",
                          formater(totaux["montant_tva"], devise)])
     lignes_t.append(["TOTAL", formater(totaux["total_final"], devise)])
+
+    c_ligne_total = c_accent_final if style.ligne_total_degrade else c_accent_principal
     t_tot = Table(lignes_t, colWidths=[largeur * 0.21, largeur * 0.21])
     t_tot.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("LINEABOVE", (0, -1), (-1, -1), 1, c_accent),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, c_ligne_total),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
         ("FONTSIZE", (0, -1), (-1, -1), 12),
-        ("TEXTCOLOR", (0, -1), (-1, -1), c_accent),
+        ("TEXTCOLOR", (0, -1), (-1, -1), c_ligne_total),
     ]))
     wrapper = Table([[None, t_tot]],
                     colWidths=[largeur * 0.55, largeur * 0.45])
@@ -288,12 +334,13 @@ def demander_nb(q, d=0.0):
 
 
 def mode_interactif():
+    from styles import liste_styles
+
     print("\n" + "=" * 50)
     print("  NFact - Mode interactif (offline)")
     print("=" * 50)
     config = json.loads(json.dumps(DEFAULT_CONFIG))
 
-    # Charger vendeur par défaut si existe
     vend_file = PROJECT_DIR / "config" / "vendeur.json"
     if vend_file.exists():
         try:
@@ -305,6 +352,9 @@ def mode_interactif():
 
     type_doc = demander("Type (FACTURE/DEVIS)", "FACTURE").upper()
     config["type_document"] = type_doc if type_doc in ("FACTURE", "DEVIS") else "FACTURE"
+
+    print(f"\nStyles disponibles : {', '.join(liste_styles())}")
+    config["style"] = demander("Style", "classique")
 
     print("\n--- Client ---")
     config["client"]["nom"] = demander("Nom du client")
@@ -329,7 +379,6 @@ def mode_interactif():
     config["remise_pourcentage"] = demander_nb("Remise % (0 si aucune)", 0)
     config["conditions_paiement"] = demander("Conditions", "Paiement à réception.")
 
-    # Sauvegarder le client si demandé
     if input("\nSauvegarder ce client pour plus tard ? (o/N) : ").strip().lower() == "o":
         slug = "".join(c if c.isalnum() else "_" for c in config["client"]["nom"]).strip("_")
         client_file = CLIENTS_DIR / f"{slug}.json"
@@ -367,7 +416,6 @@ def lister_clients():
 def charger_config(chemin):
     p = Path(chemin)
     if not p.exists():
-        # Essayer dans clients/
         p = CLIENTS_DIR / f"{chemin}.json"
     if not p.exists():
         print(f"❌ Fichier introuvable : {chemin}")
@@ -382,6 +430,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="Liste des clients")
     parser.add_argument("--output-dir", help="Dossier de sortie")
     parser.add_argument("--type", choices=["FACTURE", "DEVIS"], help="Type de document")
+    parser.add_argument("--style", help="Nom du style (voir styles/)")
     parser.add_argument("--articles", nargs="*", help="Articles : 'desc:prix:qte'")
     args = parser.parse_args()
 
@@ -396,6 +445,8 @@ def main():
 
     if args.type:
         config["type_document"] = args.type
+    if args.style:
+        config["style"] = args.style
 
     if args.articles:
         arts = []
@@ -412,7 +463,6 @@ def main():
         if arts:
             config["articles"] = arts
 
-    # Validation minimale
     if not config["vendeur"].get("nom"):
         print("❌ Nom du vendeur manquant")
         return 1
@@ -423,7 +473,6 @@ def main():
         print("❌ Aucun article")
         return 1
 
-    # Dossier de sortie : prioritaire > Android Download > local
     if args.output_dir:
         out = Path(args.output_dir)
     elif (Path.home() / "storage" / "shared" / "Download").exists():
@@ -442,6 +491,7 @@ def main():
 
     numero = generer_pdf(config, chemin)
     print(f"\n✅ {config['type_document']} générée !")
+    print(f"   Style   : {config.get('style', 'classique')}")
     print(f"   Numéro  : {numero}")
     print(f"   Total   : {formater(calculer_totaux(config)['total_final'], config['devise'])}")
     print(f"   Fichier : {chemin}")
