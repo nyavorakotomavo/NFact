@@ -66,7 +66,17 @@ jobs:
         run: |
           mkdir -p logos/tmp
           curl -L -o logos/tmp/logo_vendeur.png "${{ inputs.logo_url }}"
-
+      - name: Debug - contenu réel des fichiers styles
+        run: |
+          echo "=== Arborescence styles/ ==="
+          ls -la styles/
+          echo ""
+          for f in styles/*.py; do
+            echo "=== $f ==="
+            cat -A "$f" | head -5
+            echo "--- (fin aperçu, taille totale: $(wc -l < "$f") lignes) ---"
+            echo ""
+          done
       - name: Extraction IA → invoice.json
         env:
           SELLER_INFOS: ${{ inputs.seller_infos }}
