@@ -12,16 +12,9 @@ on:
         required: true
         type: string
       style:
-        description: "Style visuel du PDF"
-        required: true
-        type: choice
-        options:
-          - classique
-          - stripe
-          - quickbooks
-          - freshbooks_modern
-          - violet
-        default: classique
+        description: "Style visuel du PDF (laisse vide pour voir la liste disponible)"
+        required: false
+        type: string
       couleur_accent:
         description: "Couleur(s) principale(s) — une seule (#7C3AED) ou plusieurs séparées par virgules (#7C3AED,#9333EA,#A78BFA) pour un dégradé"
         required: false
