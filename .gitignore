@@ -1,1 +1,6 @@
 config/ia.json
+.aider*
+__pycache__/
+*.pyc
+.vscode/
+
